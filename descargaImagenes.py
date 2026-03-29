@@ -19,8 +19,13 @@ sesion.headers.update(headers)
 
 res = pd.read_csv('temasekwreck-temasekblueandwhites.csv')
 
+#Filtro solo las piezas con informacion suficiente
 condicionesUtiles = ['Intact', 'Half intact', 'Base', 'Rim to Base', 'Base with stem']
-seleccionados = res[res['Condition'].isin(condicionesUtiles)]
+seleccion_estado = res[res['Condition'].isin(condicionesUtiles)]
+
+formasSencillas = ['Dish', 'Dish?', 'Bowl & dish']
+seleccionadosFinales = seleccion_estado[seleccion_estado['Description/Shape'].isin(formasSencillas)]
+
 
 folder = 'img'
 os.makedirs('img', exist_ok=True)
@@ -30,7 +35,7 @@ url = "https://epress.nus.edu.sg/sitereports/temasekwreck/images/"
 countok = 0
 counterror = 0
 
-for index, row in seleccionados.iterrows():
+for index, row in seleccionadosFinales.iterrows():
     aux = row['UIN']
     rowImgString = row['Image']
 
@@ -54,7 +59,7 @@ for index, row in seleccionados.iterrows():
             if response.status_code == 200:
                 with open(ruta_guardado, 'wb') as handler:
                     handler.write(response.content)
-                print(f"   -> {nom}: DESCARGADA OK")
+                print(f"   -> {nom}: DESCARGADA")
                 countok += 1
             elif response.status_code == 404:
                 print(f"   -> {nom}: 404 No encontrada. Probando variante...")
