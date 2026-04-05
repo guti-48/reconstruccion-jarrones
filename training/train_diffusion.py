@@ -34,9 +34,7 @@ for epoch in range(epochs):
         optimizer.step()
 
     print(f"Epoch {epoch} - Loss: {loss.item()}")
+    masked, real = next(iter(dataloader))
+    mostrar_resultados(masked[0:1], real[0:1], model)
 
 
-# Test visual después de entrenar
-masked, real = next(iter(dataloader))
-
-mostrar_resultados(masked[0:1], real[0:1], model)

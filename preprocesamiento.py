@@ -1,8 +1,5 @@
-import sys
-print("Python version:", sys.executable)
-import numpy as np
 import cv2, os, random
-
+import numpy as np
 
 FOTOS_DIR = 'img'
 OUTPUT_FOLDER = 'imagenes_procesadas'
