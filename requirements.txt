@@ -5,3 +5,5 @@ beautifulsoup4
 lxml 
 opencv-python
 numpy
+torch
+matplotlib

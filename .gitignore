@@ -2,3 +2,9 @@ img/
 __pycache__/
 .DS_Store
 imagenes_procesadas/
+images/
+masked_images/
+masks/
+venv/
+*.docx
+*.jpg
