@@ -5,6 +5,14 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urljoin
 
+# --- RUTAS DINÁMICAS ---
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+CSV_PATH = os.path.join(BASE_DIR, 'temasekwreck-temasekblueandwhites.csv')
+FOLDER = os.path.join(BASE_DIR, 'data', 'raw')
+
+os.makedirs(FOLDER, exist_ok=True)
+# -----------------------
+
 sesion = requests.Session()
 reintento = Retry(total=5, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=["HEAD", "GET", "OPTIONS"])
 
@@ -17,18 +25,14 @@ headers = {
 }
 sesion.headers.update(headers)
 
-res = pd.read_csv('temasekwreck-temasekblueandwhites.csv')
+res = pd.read_csv(CSV_PATH)
 
-#Filtro solo las piezas con informacion suficiente
+# Filtro solo las piezas con informacion suficiente
 condicionesUtiles = ['Intact', 'Half intact', 'Base', 'Rim to Base', 'Base with stem']
 seleccion_estado = res[res['Condition'].isin(condicionesUtiles)]
 
 formasSencillas = ['Dish', 'Dish?', 'Bowl & dish']
 seleccionadosFinales = seleccion_estado[seleccion_estado['Description/Shape'].isin(formasSencillas)]
-
-
-folder = 'img'
-os.makedirs('img', exist_ok=True)
 
 url = "https://epress.nus.edu.sg/sitereports/temasekwreck/images/"
 
@@ -42,13 +46,13 @@ for index, row in seleccionadosFinales.iterrows():
     if pd.isna(rowImgString):
         continue
 
-    #parseo del csv
+    # parseo del csv
     listaAdd = rowImgString.replace('.jpg','.jpg|').replace('.JPG', '.JPG|').split('|')
     lista = [x.strip() for x in listaAdd if x.strip()]
 
     for nom in lista:
         full_url = url + nom
-        ruta_guardado = f'{folder}/{nom}'
+        ruta_guardado = os.path.join(FOLDER, nom)
 
         if os.path.exists(ruta_guardado):
             continue

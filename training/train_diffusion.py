@@ -1,16 +1,21 @@
 import sys
 import os
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import torch
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(BASE_DIR)
+DATASET_DIR = os.path.join(BASE_DIR, 'data', 'processed')
+
 from utils.visualize import mostrar_resultados
 from torch.utils.data import DataLoader
 from models.unet import UNet
 from models.diffusion import add_noise
 from utils.dataset import CeramicDataset
 
+
+
 # Dataset
-dataset = CeramicDataset("../imagenes_procesadas")
+dataset = CeramicDataset(root_dir=DATASET_DIR)
 dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
 # Modelo

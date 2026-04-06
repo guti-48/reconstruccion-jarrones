@@ -1,26 +1,23 @@
 import cv2, os, random
 import numpy as np
 
-FOTOS_DIR = 'img'
-OUTPUT_FOLDER = 'imagenes_procesadas'
+# --- RUTAS DINÁMICAS ---
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+FOTOS_DIR = os.path.join(BASE_DIR, 'data', 'raw')
+OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'processed')
 IMG_SIZE = 256
 
-os.makedirs(f'{OUTPUT_FOLDER}/images', exist_ok=True)
-os.makedirs(f'{OUTPUT_FOLDER}/masks', exist_ok=True)
-os.makedirs(f'{OUTPUT_FOLDER}/masked_images', exist_ok=True)
+os.makedirs(os.path.join(OUTPUT_FOLDER, 'images'), exist_ok=True)
+os.makedirs(os.path.join(OUTPUT_FOLDER, 'masks'), exist_ok=True)
+os.makedirs(os.path.join(OUTPUT_FOLDER, 'masked_images'), exist_ok=True)
+# -----------------------
 
-###############################################
-######                                  #######
-######                                  #######
-######                                  #######
-######                                  #######
-###############################################
 def genera_mascara(img_shape):
     '''Genera una mascara de daño virtual'''
     mask = np.zeros((img_shape[0], img_shape[1]), dtype=np.uint8)
     h, w = img_shape[0], img_shape[1]
 
-    #añadiremos grietas
+    # añadiremos grietas
     for _ in range(random.randint(2, 6)):
         x1, y1 = random.randint(0, w), random.randint(0, h)
         x2, y2 = random.randint(0, w), random.randint(0, h)
@@ -51,13 +48,13 @@ for count, filename in enumerate(archivos):
     # 2. Generar máscara de daño (255 = daño, 0 = intacto)
     mask = genera_mascara((IMG_SIZE, IMG_SIZE))
     
-    # 3. Crear imagen con el daño aplicado (para visualizar, las zonas dañadas en blanco)
+    # 3. Crear imagen con el daño aplicado
     masked_image = img_resized.copy()
     masked_image[mask == 255] = [255, 255, 255] 
     
     # 4. Guardar archivos
-    cv2.imwrite(f'{OUTPUT_FOLDER}/images/{filename}', img_resized)
-    cv2.imwrite(f'{OUTPUT_FOLDER}/masks/{filename}', mask)
-    cv2.imwrite(f'{OUTPUT_FOLDER}/masked_images/{filename}', masked_image)
+    cv2.imwrite(os.path.join(OUTPUT_FOLDER, 'images', filename), img_resized)
+    cv2.imwrite(os.path.join(OUTPUT_FOLDER, 'masks', filename), mask)
+    cv2.imwrite(os.path.join(OUTPUT_FOLDER, 'masked_images', filename), masked_image)
 
 print(f"Preprocesamiento completado. {len(archivos)} imágenes procesadas.")

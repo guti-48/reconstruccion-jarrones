@@ -2,13 +2,17 @@ import matplotlib.pyplot as plt
 import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(BASE_DIR)
+DATASET_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 
 from utils.dataset import *
 
+
 def test_dataset():
     
-    dataset = CeramicDataset(root_dir='../imagenes_procesadas') 
+    dataset = CeramicDataset(root_dir=DATASET_DIR)
     
     print(f"Total de imágenes en el dataset: {len(dataset)}")
     
