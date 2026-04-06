@@ -31,7 +31,7 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
 
 ---
 
-## 📋 Módulos Python y su función
+## Módulos Python y su función
 
 ### **1. `descargaImagenes.py` — Recopilación de datos**
 - **Propósito:** Descargar dataset de cerámica antigua desde servidor remoto
@@ -152,7 +152,7 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
 
 ---
 
-## 🔄 FLUJO COMPLETO DEL PROYECTO
+## FLUJO COMPLETO DEL PROYECTO
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -204,7 +204,7 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
 
 ---
 
-## 🚀 INSTRUCCIONES DE EJECUCIÓN PASO A PASO
+## INSTRUCCIONES DE EJECUCIÓN PASO A PASO
 
 ### Requisitos previos
 ```bash
@@ -243,7 +243,7 @@ python train_diffusion.py
 
 ---
 
-## 📊 Salida esperada
+## Salida esperada
 
 Tras ejecutar `train_diffusion.py`:
 
@@ -261,11 +261,10 @@ El loss debe **disminuir** en cada epoch (convergencia).
 
 ---
 
-## 🔗 Integración futura
+## Integración futura
 
 Este módulo (M3) es compatible con:
 - **M2 (GAN):** Proporciona guía de bordes → `edge_guidance` en diffusion.py
-- **M4 (Swin Transformer):** Hook preparado para atención local en p_sample()
 
 Para integración, modificar `train_diffusion.py`:
 ```python
