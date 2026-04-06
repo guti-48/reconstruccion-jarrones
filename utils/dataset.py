@@ -13,8 +13,7 @@ class CeramicDataset(Dataset):
 
     def adaptive_canny(self, img_gray, sigma=0.33):
         v = np.median(img_gray)
-        
-        #Umbral adaptativo
+
         lower = int(max(0, (1.0 - sigma) * v))
         upper = int(min(255, (1.0 + sigma) * v))
         
@@ -35,20 +34,17 @@ class CeramicDataset(Dataset):
         masked = cv2.resize(masked, (256, 256))
         
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        masked_gray = cv2.cvtColor(masked, cv2.COLOR_BGR2GRAY)
+        edges = self.adaptive_canny(img_gray)
+        # convertir a tensor añadiendo la dimensión del canal (1, 256, 256)
+        edges_tensor = torch.tensor(edges).unsqueeze(0).float() / 255.0
         
-        diff = cv2.absdiff(img_gray, masked_gray)
-        _, mask = cv2.threshold(diff, 10, 255, cv2.THRESH_BINARY)
+        # textura a color
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        masked_rgb = cv2.cvtColor(masked, cv2.COLOR_BGR2RGB)
         
-        edge = self.adaptive_canny(img_gray)
-        
-        edge[mask == 255] = 0
-        
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        img = torch.tensor(img).permute(2, 0, 1).float() / 255.0
-        img_gray = torch.tensor(img_gray).unsqueeze(0).float() / 255.0
-        edge = torch.tensor(edge).unsqueeze(0).float() / 255.0
-        mask = torch.tensor(mask).unsqueeze(0).float() / 255.0
+        # permutar dimensiones a formato PyTorch (3, 256, 256)
+        img_tensor = torch.tensor(img_rgb).permute(2, 0, 1).float() / 255.0
+        masked_tensor = torch.tensor(masked_rgb).permute(2, 0, 1).float() / 255.0
 
-        return img, img_gray, edge, mask
+        # retornamos las 3 variables
+        return masked_tensor, img_tensor, edges_tensor

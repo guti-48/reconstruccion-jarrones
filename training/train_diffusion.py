@@ -20,7 +20,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 epochs = 5
 
 for epoch in range(epochs):
-    for masked, real in dataloader:
+    for masked, real, *_ in dataloader:
 
         t = torch.randint(1, 10, (1,))
         noisy, noise = add_noise(real, t)
@@ -34,7 +34,10 @@ for epoch in range(epochs):
         optimizer.step()
 
     print(f"Epoch {epoch} - Loss: {loss.item()}")
-    masked, real = next(iter(dataloader))
-    mostrar_resultados(masked[0:1], real[0:1], model)
-
-
+    
+    # Extraemos el lote completo y nos quedamos solo con la posición 0 (masked) y 1 (real)
+    batch = next(iter(dataloader))
+    masked_test = batch[0][0:1]
+    real_test = batch[1][0:1]
+    
+    mostrar_resultados(masked_test, real_test, model)
