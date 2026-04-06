@@ -10,7 +10,7 @@ from models.diffusion import add_noise
 from utils.dataset import CeramicDataset
 
 # Dataset
-dataset = CeramicDataset("imagenes_procesadas")
+dataset = CeramicDataset("../imagenes_procesadas")
 dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
 # Modelo
