@@ -68,16 +68,29 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
   ```
 
 ### **3. `utils/dataset.py` — Cargador de datos (Dataset PyTorch)**
-- **Propósito:** Interfaz para acceder a imágenes durante entrenamiento
+- **Propósito:** Interfaz para acceder a las imágenes durante el entrenamiento y extraer los bordes estructurales
 - **Clase:** `CeramicDataset`
 - **Funcionalidad:**
   - Lee pares (imagen_dañada, imagen_original)
   - Normaliza a valores [0, 1]
   - Convierte a tensores PyTorch (B, 3, 256, 256)
   - Compatible con `DataLoader` para batches
-- **No se ejecuta directamente**, se importa en `train_diffusion.py`
+  - Canny Adaptativo: Calcula dinámicamente los umbrales basados en la mediana de los píxeles para extraer los bordes reales de la cerámica, suprimiendo ruido
+  - Retorno: Devuelve una tupla de 3 tensores: (masked_tensor, img_tensor, edges_tensor)
+- **No se ejecuta directamente**, se importa en los scripts de validación y entrenamiento
 
-### **4. `models/unet.py` — Arquitectura de red neuronal**
+### **4. `utils/networks.py` — Arquitectura Generativa Adversaria (GAN)**
+- **Propósito:** Definir la estructura base del modelo de predicción de patrones basado en la arquitectura de edge-connect
+- **Clase:** `EdgeGenerator(x)` y `Discriminator(x)`
+  - Implementa submuestreo espacial: El codigo usa `MaxPool2d` en lugar de convoluciones con salto
+  - Implementa estabilización: Normalización Espectral en todas las capas convolucionales
+  - Evalúa textura: El Discriminador usa arquitectura *PatchGAN*
+  - **Entrada:** tensor imagen en gris + tensor bordes + máscara binaria
+  - **Salida:** tensor con la predicción de la estructura de líneas (bordes generados)
+- **Uso:** Inferir y reconstruir el esqueleto estructural de los patrones faltantes
+- **No se ejecuta directamente**, se carga en `train_networks.py`
+
+### **5. `models/unet.py` — Arquitectura de red neuronal**
 - **Propósito:** Definir el modelo U-Net para predicción de ruido
 - **Clase:** `UNet(in_channels=3, out_channels=3)`
 - **Arquitectura:**
@@ -97,7 +110,7 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
 - **Función:** Predice ruido gaussiano (para entrenar modelo difusión)
 - **No se ejecuta directamente**, se carga en `train_diffusion.py`
 
-### **5. `models/diffusion.py` — Funciones de difusión**
+### **6. `models/diffusion.py` — Funciones de difusión**
 - **Propósito:** Implementar forward diffusion (corrupción con ruido)
 - **Función principal:** `add_noise(x, t)`
   - Implementa ecuación DDPM: $x_t = \sqrt{\alpha_t} \cdot x_0 + \sqrt{1-\alpha_t} \cdot \epsilon$
@@ -108,7 +121,7 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
 - **Uso:** Generar datos de entrenamiento corrompidos
 - **No se ejecuta directamente**, se importa en `train_diffusion.py`
 
-### **6. `utils/visualize.py` — Visualización de resultados**
+### **7. `utils/visualize.py` — Visualización de resultados**
 - **Propósito:** Mostrar comparación visual de reconstrucciones
 - **Función:** `mostrar_resultados(masked, real, model)`
 - **Proceso:**
@@ -122,7 +135,58 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
      - Reconstrucción estimada
 - **No se ejecuta directamente**, se llama desde `train_diffusion.py` cada epoch
 
-### **7. `training/train_diffusion.py` — Script de entrenamiento**
+### **8. `test/test_dataset.py` Validación de Datos y bordes**
+- **Propósito:** Comprobacion visual de que el Dataloader carga correctamente las imagenes y extrae los bordes estructurales antes de entrenear a la IA.
+- **Flujo de ejecución:** 
+  ```
+  1. Instanciar CeramicDataset apuntando a processed/
+  2. Extraer un elemento (índice 0) del dataset
+  3. Convertir tensores PyTorch a arrays Numpy para visualización
+  4. Generar plot de Matplotlib con 5 sub-gráficas:
+     a) Ground Truth (Intacta)
+     b) Cerámica Rota (Masked)
+     c) Escala de Grises
+     d) Canny Adaptativo (Bordes extraídos dinámicamente)
+     e) Máscara Generada
+  5. Mostrar la ventana gráfica interactiva
+  ```
+- **Parámetros:**
+  - `root_dir=../processed`
+  - `sigma=0.33`
+  - `figsize=(20, 3)`
+- **Ejecución:** 
+```bash
+  cd training
+  python train_dataset.py
+  ```
+
+### **9. `test/test_networks.py` — Validación de Arquitectura**
+- **Propósito:** Ejecutar una simulacion para asegurar que no hay errores dimensionales tras adaptar el Maximum Pooling en el Generador.
+- **Flujo de ejecución:** 
+  ```
+  1. Crear tensores "dummy" (aleatorios) simulando imágenes reales
+  2. Instanciar EdgeGenerator y Discriminator
+  3. Test del Generador (EdgeGenerator):
+    a) Pasar tensor de entrada (1, 3, 256, 256)
+    b) Validar ejecución sin errores de capas
+    c) Comprobar dimensión de salida esperada (1, 1, 256, 256)
+  4. Test del Discriminador (PatchGAN):
+    a) Pasar tensor de entrada (1, 4, 256, 256)
+    b) Validar ejecución sin errores con Normalización Espectral
+    c) Comprobar dimensión de la matriz de parches resultante
+  5. Imprimir logs de éxito y dimensiones por consola
+  ```
+- **Parámetros:**
+  - `dummy_input_gen=(1, 3, 256, 256)`
+  - `dummy_input_disc=(1, 4, 256, 256)`
+  - `use_spectral_norm=True`
+- **Ejecución:** 
+```bash
+  cd training
+  python train_networks.py
+  ```
+
+### **10. `training/train_diffusion.py` — Script de entrenamiento**
 - **Propósito:** Entrenar el modelo U-Net para predecir ruido (reverse diffusion)
 - **Flujo de ejecución:**
   ```
@@ -173,6 +237,17 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
         ├─→ dataset.py
         │   └─ Carga pares (dañada, original) desde /imagenes_procesadas/
         │   └─ Normaliza y convierte a tensores
+        │   └─ Extrae bordes estructurales
+        │
+        ├─→ test_dataset.py
+        │   └─ Visualiza la correcta extracción de bordes y máscaras
+        │
+        ├─→ networks.py
+        │   ├─ EdgeGenerator (Codigo con MaxPool + Residuales)
+        │   └─ Discriminator (PatchGAN + Normalización Espectral)
+        │
+        ├─→ test_networks.py
+        │   └─ Valida dimensiones de tensores simulados
         │
         ├─→ diffusion.py
         │   └─ add_noise() corrompe imágenes con ruido gaussiano
@@ -197,9 +272,9 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
 ┌─────────────────────────────────────────────────────────────┐
 │ RESULTADO FINAL                                             │
 └─────────────────────────────────────────────────────────────┘
+    └─ Modelo de Predicción de Patrones para estructura
     └─ Modelo U-Net capaz de predecir ruido
     └─ Usado para reconstruir áreas dañadas (reverse diffusion)
-    └─ Listo para integración con M2 (GAN de bordes) y Swin Transformer
 ```
 
 ---
@@ -231,7 +306,24 @@ python preprocesamiento.py
 # Duración: ~1-2 minutos
 ```
 
-**Paso 3: Entrenar modelo de difusión**
+**Paso 3: Validar extracción de bordes y arquitectura GAN**
+```bash
+cd test
+python test_dataset.py
+# Muestra:
+#   - Ventana gráfica interactiva con 3 sub-imágenes (Ground Truth, Masked, Canny)
+# Duración: ~5-10 segundos
+```
+
+```bash
+cd test
+python test_networks.py
+# Muestra:
+#   - Verificación matemática por consola del tamaño de los tensores de salida
+# Duración: ~5-10 segundos
+```
+
+**Paso 4: Entrenar modelo de difusión**
 ```bash
 cd training
 python train_diffusion.py
@@ -244,6 +336,24 @@ python train_diffusion.py
 ---
 
 ## Salida esperada
+Tras ejecutar `test_dataset.py`:
+```
+[Gráfica: Ground Truth | Escala de Grises | Canny Adaptativo]
+```
+
+Tras ejecutar `test_network.py`:
+```
+--- Iniciando prueba de la arquitectura de Redes ---
+Instanciando EdgeGenerator...
+¡Éxito! Forma de salida del Generador: torch.Size([1, 1, 256, 256])
+ (Esperado: [1, 1, 256, 256] -> 1 imagen, 1 canal de bordes, 256x256)
+
+Instanciando Discriminador...
+¡Éxito! Forma de salida del Discriminador: torch.Size([1, 1, 32, 32])
+ (Esperado: Una matriz más pequeña, ej: [1, 1, 32, 32], evaluando los parches)
+
+¡La arquitectura funciona perfectamente y no hay errores de dimensiones!
+```
 
 Tras ejecutar `train_diffusion.py`:
 
@@ -269,7 +379,7 @@ Este módulo (M3) es compatible con:
 Para integración, modificar `train_diffusion.py`:
 ```python
 # Cargar salida de M2 (bordes)
-edge_guidance = gan_model(masked)
+edge_guidance = gan_model(masked, edges, mask)
 
 # Entrenar con guía
 reverse_diffusion(..., edge_guidance=edge_guidance, ...)
