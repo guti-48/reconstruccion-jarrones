@@ -31,7 +31,7 @@ res = pd.read_csv(CSV_PATH)
 condicionesUtiles = ['Intact', 'Half intact', 'Base', 'Rim to Base', 'Base with stem']
 seleccion_estado = res[res['Condition'].isin(condicionesUtiles)]
 
-formasSencillas = ['Dish', 'Dish?', 'Bowl & dish']
+formasSencillas = ['Dish', 'Dish?', 'Bowl & dish', 'Bowl', 'Bowl?', 'Saucer', 'Cover']
 seleccionadosFinales = seleccion_estado[seleccion_estado['Description/Shape'].isin(formasSencillas)]
 
 url = "https://epress.nus.edu.sg/sitereports/temasekwreck/images/"
