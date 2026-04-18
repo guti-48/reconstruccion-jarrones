@@ -12,8 +12,6 @@ from models.unet import UNet
 from models.diffusion import add_noise
 from utils.dataset import CeramicDataset
 
-
-
 # Dataset
 dataset = CeramicDataset(root_dir=DATASET_DIR)
 dataloader = DataLoader(dataset, batch_size=4, shuffle=True)

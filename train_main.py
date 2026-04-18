@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 
 #Importaciones necesarias de m1 (guti)
 from utils.dataset import CeramicDataset
-from utils.metrica import calcular_metricas
+from utils.metrics import calcular_metricas
 from utils.checkpoint import CheckpointManager
 
 #Importaciones necesarias de m2(rafa)
