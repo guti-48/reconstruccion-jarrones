@@ -160,7 +160,6 @@ for epoch in range(1, config.EPOCHS + 1):
         # oussama tiene que terminar su parte, esto es solo orientativo hasta que su parte accabe
         #     imagen_reconstruida = reverse_diffusion(modelo_difusion, masked_tensor, boceto_predicho, dispositivo)
         imagen_reconstruida = masked_tensor
-        # ─────────────────────────────────────────────────────────────────────
 
         try:
             psnr_val, ssim_val = calcular_metricas(img_tensor, imagen_reconstruida)

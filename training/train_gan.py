@@ -20,7 +20,7 @@ class Config:
     BETA2 = 0.9
     FM_LOSS_WEIGHT = 10
     BATCH_SIZE = 4
-    EPOCHS = 5
+    EPOCHS = 100
     EDGE_THRESHOLD = 0.5
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
