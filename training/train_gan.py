@@ -20,7 +20,7 @@ class Config:
     BETA2 = 0.9
     FM_LOSS_WEIGHT = 10
     BATCH_SIZE = 4
-    EPOCHS = 5
+    EPOCHS = 150
     EDGE_THRESHOLD = 0.5
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -37,6 +37,9 @@ def train_gan():
     
     edge_model = EdgeModel(config).to(config.DEVICE)
     edgeacc = EdgeAccuracy(config.EDGE_THRESHOLD).to(config.DEVICE)
+
+    # Bloque de carga eliminado para empezar desde cero
+    print("Empezando entrenamiento...")
 
     # Bucle de Entrenamiento
     for epoch in range(1, config.EPOCHS + 1):
@@ -69,8 +72,11 @@ def train_gan():
         print(f" -> Pérdida Falsificador (Gen): {epoch_gen_loss/num_batches:.4f}")
         print(f" -> Pérdida Policía (Dis): {epoch_dis_loss/num_batches:.4f}")
         print(f" -> Precisión de Bordes: {(epoch_precision/num_batches)*100:.2f}%")
+        
+        if epoch % 10 == 0:
+            edge_model.save()
+            print(f"--> Punto de control guardado en la época {epoch}")
 
-    # Guarda los pesos finales
     edge_model.save()
     print("\n¡Entrenamiento GAN completado!")
 

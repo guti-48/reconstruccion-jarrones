@@ -13,11 +13,21 @@ class CeramicDataset(Dataset):
         self.files = os.listdir(self.images_dir)
 
     def adaptive_canny(self, img_gray, sigma=0.33):
-        v = np.median(img_gray)
+        # EL HACHAZO: Pintamos de negro puro el 30% inferior de la foto
+        alto, ancho = img_gray.shape
+        img_gray[int(alto * 0.70):alto, :] = 0
+        
+        # Filtro 3x3 para eliminar la textura del polvo y arañazos
+        blurred = cv2.GaussianBlur(img_gray, (3, 3), 0)
+        
+        # Calcular la mediana solo de los píxeles válidos
+        pixeles_validos = blurred[blurred > 0]
+        v = np.median(pixeles_validos) if len(pixeles_validos) > 0 else 127
+        
+        # Generar bordes con los umbrales corregidos
         lower = int(max(0, (1.0 - sigma) * v))
         upper = int(min(255, (1.0 + sigma) * v))
-        edged = cv2.Canny(img_gray, lower, upper)
-        return edged
+        return cv2.Canny(blurred, lower, upper)
 
     def __len__(self):
         return len(self.files)
@@ -37,6 +47,8 @@ class CeramicDataset(Dataset):
         
         # Procesar grises y bordes
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Llamamos al Canny mejorado
         edges = self.adaptive_canny(img_gray)
         
         # Convertir a tensores de 1 canal (1, 256, 256)
