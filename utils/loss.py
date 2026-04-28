@@ -21,12 +21,12 @@ class AdversarialLoss(nn.Module):
 
         if type == 'nsgan':
             self.criterion = nn.BCELoss()
-
         elif type == 'lsgan':
             self.criterion = nn.MSELoss()
-
         elif type == 'hinge':
             self.criterion = nn.ReLU()
+        else:
+            raise ValueError("Error de configuración: El GAN_LOSS '{type}' no está programado. Usa 'nsgan', 'lsgan' o 'hinge'.")
 
     def __call__(self, outputs, is_real, is_disc=None):
         if self.type == 'hinge':
