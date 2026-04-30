@@ -6,38 +6,38 @@ from utils.models import EdgeModel
 from training.train_gan import Config
 
 def clean_and_get_edges(img_gray, mask_bin, sigma=0.33):
-    # 1. Crear máscara estricta del fondo para matar el ruido exterior
+    # Crear máscara estricta del fondo para matar el ruido exterior
     _, bg_mask = cv2.threshold(img_gray, 15, 255, cv2.THRESH_BINARY)
     kernel_bg = np.ones((3,3), np.uint8)
-    bg_mask = cv2.dilate(bg_mask, kernel_bg, iterations=1) # Engrosamos un pelín el límite
+    bg_mask = cv2.dilate(bg_mask, kernel_bg, iterations=1) 
     
-    # 2. Inpainting para ocultar el rayajo blanco a los ojos de Canny
+    # Inpainting para ocultar el rayajo blanco a los ojos de Canny
     img_inpainted = cv2.inpaint(img_gray, mask_bin, 3, cv2.INPAINT_TELEA)
     
-    # 3. Desenfocar
+    # Desenfocar
     blurred = cv2.GaussianBlur(img_inpainted, (3, 3), 0)
     
-    # 4. Mediana solo en la cerámica válida
+    # Mediana solo en la cerámica válida
     pixeles_validos = blurred[bg_mask == 255]
     v = np.median(pixeles_validos) if len(pixeles_validos) > 0 else 127
     
-    # 5. Canny natural
+    # Canny natural
     lower = int(max(0, (1.0 - sigma) * v))
     upper = int(min(255, (1.0 + sigma) * v))
     edges = cv2.Canny(blurred, lower, upper)
     
-    # 6. Limpieza pre-IA
+    # Limpieza pre-IA
     edges[bg_mask == 0] = 0     # Borrar cualquier borde detectado en el fondo
-    edges[mask_bin == 255] = 0  # VACIAR el agujero: la IA debe predecir esto, si le dejamos basura, se confunde
+    edges[mask_bin == 255] = 0  # Vaciar el agujero: la IA debe predecir esto, si le dejamos basura, se confunde
     
-    # 7. El hachazo de la regla
+    # El hachazo de la regla
     alto, ancho = edges.shape
     edges[int(alto * 0.70):alto, :] = 0
     
     return edges, bg_mask
 
 def remove_small_noise(img, min_size=15):
-    # MAGIA: Algoritmo que busca formas y borra las que sean más pequeñas que 'min_size'
+    # Algoritmo que busca formas y borra las que sean más pequeñas que 'min_size'
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img, connectivity=8)
     clean_img = np.zeros_like(img)
     
@@ -87,15 +87,14 @@ def generar_esqueletos():
             
             _, mask_bin = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
             
-            # --- 1. PRE-PROCESAMIENTO BLINDADO ---
+            # PRE-PROCESAMIENTO BLINDADO 
             edges, bg_mask = clean_and_get_edges(img_gray, mask_bin)
             
             # Tensors[cite: 2]
             img_gray_tensor = torch.tensor(img_gray).unsqueeze(0).unsqueeze(0).float().to(config.DEVICE) / 255.0
             edges_tensor = torch.tensor(edges).unsqueeze(0).unsqueeze(0).float().to(config.DEVICE) / 255.0
             mask_tensor = torch.tensor(mask_bin).unsqueeze(0).unsqueeze(0).float().to(config.DEVICE) / 255.0
-            
-            # --- 2. IA PREDICE ---
+
             # El modelo reemplaza internamente la máscara por 1.0 (blanco puro) para predecir[cite: 1]
             outputs = modelo(img_gray_tensor, edges_tensor, mask_tensor)
             
@@ -103,7 +102,6 @@ def generar_esqueletos():
             outputs_merged = (outputs * mask_tensor) + (edges_tensor * (1 - mask_tensor))
             borde_final = outputs_merged.squeeze().cpu().numpy()
             
-            # --- 3. POST-PROCESAMIENTO (LA CURA DEL RUIDO) ---
             # Aumentamos el umbral al 65% para matar las dudas de la IA
             borde_final = (borde_final > 0.65).astype(np.uint8) * 255
             
@@ -121,3 +119,4 @@ def generar_esqueletos():
 
 if __name__ == "__main__":
     generar_esqueletos()
+    
