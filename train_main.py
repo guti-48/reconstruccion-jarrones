@@ -63,6 +63,7 @@ guardian = CheckpointManager(save_dir='checkpoints', model_name='modeloConjunto'
 # ============================================================
 print("Cargando EdgeModel (M2) y UNet de Difusión (M3)...")
 modelo_bordes   = EdgeModel(config).to(dispositivo)
+modelo_bordes.load()  # Carga el cerebro (.pth) de la carpeta checkpoints
 modelo_difusion = UNet(in_channels=4, out_channels=3).to(dispositivo)
 
 optimizador_difusion = torch.optim.Adam(modelo_difusion.parameters(), lr=config.LR)
@@ -82,7 +83,7 @@ for epoch in range(1, config.EPOCHS + 1):
     print(f"  Época {epoch}/{config.EPOCHS}")
     print(f"{'='*50}")
 
-    modelo_bordes.train()
+    modelo_bordes.eval()
     modelo_difusion.train()
 
     epoch_gen_loss    = 0.0
@@ -97,16 +98,17 @@ for epoch in range(1, config.EPOCHS + 1):
         ]
 
         # FASE 1: GAN DE BORDES (Rafa)
-        with torch.cuda.amp.autocast(enabled=use_amp):
-            boceto_predicho, gen_loss, dis_loss, logs_m2 = modelo_bordes.process(
-                img_gray_tensor, edges_tensor, mask_tensor
-            )
+        with torch.no_grad(): # Evita guardar el historial de operaciones matemáticas
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                boceto_predicho, gen_loss, dis_loss, logs_m2 = modelo_bordes.process(
+                    img_gray_tensor, edges_tensor, mask_tensor
+                )
 
         precision, recall = edgeacc(
             edges_tensor * mask_tensor,
             boceto_predicho * mask_tensor
         )
-        modelo_bordes.backward(gen_loss, dis_loss)
+        #modelo_bordes.backward(gen_loss, dis_loss)
 
         # FASE 2: DIFUSIÓN (OUssama)
         t = torch.randint(1, 1000, (img_tensor.shape[0], 1, 1, 1)).to(dispositivo)
