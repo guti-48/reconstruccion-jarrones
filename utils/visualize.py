@@ -1,48 +1,39 @@
 import matplotlib.pyplot as plt
 import torch
+Device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def mostrar_resultados(masked, real, edges, mask, model, diffusion, device=Device):
 
-def mostrar_resultados(masked, real, model):
     model.eval()
 
+    masked = masked.to(device)[0:1]
+    real = real.to(device)[0:1]
+    edges = edges.to(device)[0:1]
+    mask = mask.to(device)[0:1]
+
     with torch.no_grad():
-        t = torch.randint(1, 10, (1,))
-        
-        # Añadir ruido a la imagen real
-        noise = torch.randn_like(real)
-        alpha_t = 0.9 ** t
-        noisy = (alpha_t**0.5)*real + ((1-alpha_t)**0.5)*noise
+        reconstruida = diffusion.sample(model, masked, edges, mask)
 
-        # Predicción del modelo
-        pred_noise = model(noisy)
+    def to_numpy(x):
+        x = x[0].cpu().permute(1,2,0).numpy()
+        return x.clip(0,1)
 
-        # Aproximación reconstruida
-        reconstruida = noisy - pred_noise
+    plt.figure(figsize=(15,4))
 
-    # Convertir a numpy
-    def to_numpy(img):
-        img = img.squeeze().permute(1,2,0).cpu().numpy()
-        return img
+    plt.subplot(1,4,1)
+    plt.title("Dañada")
+    plt.imshow(to_numpy(masked))
 
-    masked_np = to_numpy(masked)
-    real_np = to_numpy(real)
-    recon_np = to_numpy(reconstruida)
+    plt.subplot(1,4,2)
+    plt.title("Edges (GAN)")
+    plt.imshow(edges[0].cpu(), cmap="gray")
 
-    # Mostrar
-    plt.figure(figsize=(12,4))
-
-    plt.subplot(1,3,1)
-    plt.title("Imagen dañada")
-    plt.imshow(masked_np)
-    plt.axis("off")
-
-    plt.subplot(1,3,2)
+    plt.subplot(1,4,3)
     plt.title("Original")
-    plt.imshow(real_np)
-    plt.axis("off")
+    plt.imshow(to_numpy(real))
 
-    plt.subplot(1,3,3)
-    plt.title("Reconstrucción")
-    plt.imshow(recon_np)
-    plt.axis("off")
+    plt.subplot(1,4,4)
+    plt.title("Reconstruida")
+    plt.imshow(to_numpy(reconstruida))
 
+    plt.tight_layout()
     plt.show()
