@@ -1,4 +1,4 @@
-import torch, os, time
+import torch, os, time, glob
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
@@ -6,17 +6,15 @@ from torch.utils.data import DataLoader
 from utils.dataset import CeramicDataset
 from utils.metrics import calcular_metricas, EdgeAccuracy
 from utils.checkpoint import CheckpointManager
-from models.diffusion import add_noise
 
 # Importaciones M2 (rafa)
 from utils.models import EdgeModel
 
 # Importaciones M3 (oussama)
 from models.unet import UNet
+from models.diffusion import Diffusion # [M1 FIX] Importamos su nueva clase orientada a objetos
 
-# ============================================================
-# CONFIGURACIÓN GLOBAL
-# ============================================================
+# config global
 dispositivo = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Usando dispositivo: {dispositivo}")
 if dispositivo.type == 'cpu':
@@ -36,12 +34,11 @@ class Config:
     EPOCHS         = 100
     NUM_WORKERS    = 0 if os.name == 'nt' else 4
     LOG_INTERVAL   = 10
+    DIFFUSION_T    = 200 
 
 config = Config()
 
-# ============================================================
-# DATOS
-# ============================================================
+# input de datos a usar
 dataset = CeramicDataset(root_dir='data/processed')
 cargaDatos = DataLoader(
     dataset,
@@ -53,37 +50,56 @@ cargaDatos = DataLoader(
 )
 print(f"[INFO] Dataset: {len(dataset)} imágenes | {len(cargaDatos)} batches por época")
 
-# ============================================================
-# CHECKPOINT MANAGER
-# ============================================================
+# Checkpoint que nos guarda el conjunto mejor
 guardian = CheckpointManager(save_dir='checkpoints', model_name='modeloConjunto')
 
-# ============================================================
 # MODELOS
-# ============================================================
 print("Cargando EdgeModel (M2) y UNet de Difusión (M3)...")
-modelo_bordes   = EdgeModel(config).to(dispositivo)
-modelo_bordes.load()  # Carga el cerebro (.pth) de la carpeta checkpoints
-modelo_difusion = UNet(in_channels=4, out_channels=3).to(dispositivo)
+
+# Inicializamos modelo de Rafa y congelamos
+modelo_bordes = EdgeModel(config).to(dispositivo)
+modelo_bordes.load()  
+modelo_bordes.eval() # Congelado para que M3 aprenda más rápido
+
+# Inicislizamos modelo de Oussama con 8 canales
+modelo_difusion = UNet(in_channels=8, out_channels=3).to(dispositivo)
+difusion_engine = Diffusion(T=config.DIFFUSION_T, device=dispositivo)
+
+patron_busqueda = os.path.join(config.PATH, 'modeloConjunto_epoch*.pth')
+archivos_guardados = glob.glob(patron_busqueda)
+
+if archivos_guardados:
+    # Si encuentra archivos, cogemos el que se modificó más recientemente
+    ruta_m3 = max(archivos_guardados, key=os.path.getmtime)
+    
+    checkpoint = torch.load(ruta_m3, map_location=dispositivo)
+    # Extracción segura de pesos
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        modelo_difusion.load_state_dict(checkpoint["model_state_dict"])
+    elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        modelo_difusion.load_state_dict(checkpoint["state_dict"])
+    else:
+        modelo_difusion.load_state_dict(checkpoint)
+        
+    nombre_archivo = os.path.basename(ruta_m3)
+    print(f"  -> [ÉXITO] Se retoma M3 desde el archivo automático: {nombre_archivo}")
+else:
+    print("  -> [AVISO] No hay checkpoints previos. Empezando Oussama (M3) desde cero.")
 
 optimizador_difusion = torch.optim.Adam(modelo_difusion.parameters(), lr=config.LR)
-criterio_difusion    = nn.MSELoss()
-
 edgeacc = EdgeAccuracy(threshold=config.EDGE_THRESHOLD)
 
-#si hay GPU, usar autocast para precisión mixta
+# Precisión mixta
 use_amp = (dispositivo.type == 'cuda')
 scaler  = torch.cuda.amp.GradScaler(enabled=use_amp)
 
-# ============================================================
-# BUCLE DE ENTRENAMIENTO
-# ============================================================
+
+# bucle para el entrenamiento conjunyo
 for epoch in range(1, config.EPOCHS + 1):
     print(f"\n{'='*50}")
     print(f"  Época {epoch}/{config.EPOCHS}")
     print(f"{'='*50}")
 
-    modelo_bordes.eval()
     modelo_difusion.train()
 
     epoch_gen_loss    = 0.0
@@ -97,8 +113,8 @@ for epoch in range(1, config.EPOCHS + 1):
             item.to(dispositivo) for item in items
         ]
 
-        # FASE 1: GAN DE BORDES (Rafa)
-        with torch.no_grad(): # Evita guardar el historial de operaciones matemáticas
+        # FASE 1: INFERENCIA GAN DE BORDES (Rafa)
+        with torch.no_grad(): 
             with torch.cuda.amp.autocast(enabled=use_amp):
                 boceto_predicho, gen_loss, dis_loss, logs_m2 = modelo_bordes.process(
                     img_gray_tensor, edges_tensor, mask_tensor
@@ -108,30 +124,32 @@ for epoch in range(1, config.EPOCHS + 1):
             edges_tensor * mask_tensor,
             boceto_predicho * mask_tensor
         )
-        #modelo_bordes.backward(gen_loss, dis_loss)
 
-        # FASE 2: DIFUSIÓN (OUssama)
-        t = torch.randint(1, 1000, (img_tensor.shape[0], 1, 1, 1)).to(dispositivo)
-        noisy_rgb, noise = add_noise(img_tensor, t)
+        # FASE 2: ENTRENAMIENTO DIFUSIÓN (Oussama)
+        t = torch.randint(0, difusion_engine.T, (img_tensor.shape[0],), device=dispositivo).long()
+        
+        # Inyectar ruido
+        noisy_rgb, noise = difusion_engine.add_noise(img_tensor, t)
 
-        input_m3 = torch.cat([noisy_rgb, boceto_predicho.detach()], dim=1)
+        input_m3 = torch.cat([noisy_rgb, masked_tensor, boceto_predicho.detach(), mask_tensor], dim=1)
 
         optimizador_difusion.zero_grad()
         with torch.cuda.amp.autocast(enabled=use_amp):
-            pred_noise = modelo_difusion(input_m3)
-            loss_m3    = criterio_difusion(pred_noise, noise)
+            pred_noise = modelo_difusion(input_m3, t)
+            
+            loss_m3 = ((noise - pred_noise) ** 2 * mask_tensor).sum() / (mask_tensor.sum() + 1e-8)
 
         scaler.scale(loss_m3).backward()
         scaler.step(optimizador_difusion)
         scaler.update()
 
-        #acumular
+        # Acumular
         epoch_gen_loss    += gen_loss.item()
         epoch_dis_loss    += dis_loss.item()
         epoch_precision   += precision.item()
         loss_m3_acumulada += loss_m3.item()
 
-        # asi veo que no se queda pillau 
+        # logging
         if (batch_idx + 1) % config.LOG_INTERVAL == 0 or (batch_idx + 1) == len(cargaDatos):
             batches_hechos = batch_idx + 1
             elapsed        = time.time() - t_inicio_epoca
@@ -148,27 +166,22 @@ for epoch in range(1, config.EPOCHS + 1):
     num_batches  = len(cargaDatos)
     tiempo_epoca = time.time() - t_inicio_epoca
     print(f"\n  Resumen época {epoch}:")
-    print(f"  Loss GAN Gen:        {epoch_gen_loss  / num_batches:.4f}")
-    print(f"  Loss GAN Dis:        {epoch_dis_loss  / num_batches:.4f}")
     print(f"  Precisión Bordes M2: {(epoch_precision / num_batches) * 100:.2f}%")
     print(f"  Loss Difusión M3:    {loss_m3_acumulada / num_batches:.4f}")
     print(f"  Tiempo época:        {int(tiempo_epoca//60)}m {int(tiempo_epoca%60)}s")
 
-    # FASE 3: evaluacion y guardado
+    # FASE 3: EVALUACIÓN REVERSE DIFFUSION
     modelo_difusion.eval()
-    modelo_bordes.eval()
-
+    
     with torch.no_grad():
-        # oussama tiene que terminar su parte, esto es solo orientativo hasta que su parte accabe
-        #     imagen_reconstruida = reverse_diffusion(modelo_difusion, masked_tensor, boceto_predicho, dispositivo)
-        imagen_reconstruida = masked_tensor
+        print("  Generando imagen final")
+        imagen_reconstruida = difusion_engine.sample(modelo_difusion, masked_tensor, boceto_predicho, mask_tensor)
 
         try:
             psnr_val, ssim_val = calcular_metricas(img_tensor, imagen_reconstruida)
             print(f"  PSNR: {psnr_val:.4f} dB  |  SSIM: {ssim_val:.4f}")
             guardian.saveBest(modelo_difusion, ssim_val, epoch)
-            modelo_bordes.save()
         except Exception as e:
             print(f"  [AVISO] Error en evaluación época {epoch}: {e}")
 
-print("\n✅ Entrenamiento Completo.")
+print("\n Entrenamiento Completo.")
