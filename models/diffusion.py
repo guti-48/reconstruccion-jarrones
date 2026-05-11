@@ -65,78 +65,57 @@ class Diffusion:
     # p(x_{t-1} | x_t)
     # =========================
     def sample(self, model, masked, edges, mask):
-
-        # Usa el mismo device que los datos
         device = masked.device
 
-        # Asegura que todos los inputs están en GPU/CPU correcto
+        # Aseguramos tensores en el mismo dispositivo
         masked = masked.to(device)
         edges = edges.to(device)
-        mask = mask.to(device)
+        mask = mask.to(device) # Máscara: 1 es el agujero (daño), 0 es intacto
 
-        # Pone el modelo en modo evaluación (sin dropout, etc.)
         model.eval()
-
-        # Tamaño del batch
         n = masked.shape[0]
 
-        # =========================
         # INICIO: ruido puro
-        # =========================
-        # x_T ~ N(0,1)
         x = torch.randn((n, 3, 256, 256), device=device)
 
-        # =========================
         # LOOP INVERSO (T → 1)
-        # =========================
         for t in reversed(range(1, self.T)):
-
-            # Tensor con el timestep actual para todo el batch
             t_tensor = torch.full((n,), t, device=device, dtype=torch.long)
 
-            # =========================
-            # INPUT CONDICIONADO
-            # =========================
-            # x_t (ruido actual) + imagen dañada + bordes + máscara
             input_model = torch.cat([x, masked, edges, mask], dim=1)
-
-            # El modelo predice el ruido presente en x_t
             predicted_noise = model(input_model, t_tensor)
 
-            # =========================
-            # PARÁMETROS DEL PASO t
-            # =========================
-            alpha = self.alpha[t]          # cuánto se conserva
-            alpha_hat = self.alpha_hat[t] # acumulado
-            beta = self.beta[t]           # ruido del paso
+            alpha = self.alpha[t]          
+            alpha_hat = self.alpha_hat[t] 
+            beta = self.beta[t]           
 
-            # =========================
-            # COEFICIENTES DDPM
-            # =========================
-            # Factor de normalización
             coef1 = 1 / torch.sqrt(alpha)
-
-            # Factor que elimina el ruido predicho
             coef2 = (1 - alpha) / torch.sqrt(1 - alpha_hat)
 
-            # =========================
-            # RUIDO ESTOCÁSTICO
-            # =========================
-            # Añade aleatoriedad (necesario para muestreo)
             if t > 1:
                 noise = torch.randn_like(x)
             else:
-                # En el último paso ya no añadimos ruido
                 noise = torch.zeros_like(x)
 
-            # =========================
-            # PASO INVERSO
-            # =========================
-            # x_{t-1} = quitar ruido + añadir pequeña variación
-            x = coef1 * (x - coef2 * predicted_noise) + torch.sqrt(beta) * noise
+            # 1. Paso inverso normal (adivina toda la imagen)
+            x_pred = coef1 * (x - coef2 * predicted_noise) + torch.sqrt(beta) * noise
 
-        # Vuelve a modo entrenamiento
+            # ==========================================
+            # 2. INTERVENCIÓN REPAINT (INPAINTING FORZADO)
+            # ==========================================
+            # Calculamos cómo se vería la imagen real (masked) en el paso t-1
+            if t > 1:
+                t_minus_1 = torch.full((n,), t - 1, device=device, dtype=torch.long)
+                # Usamos nuestra propia función add_noise para generar la "realidad ruidosa"
+                known_noised, _ = self.add_noise(masked, t_minus_1)
+            else:
+                # En el último paso (t=1), la realidad no tiene ruido
+                known_noised = masked
+
+            # 3. Fusión Híbrida:
+            # (x_pred * mask) -> Nos quedamos con la imaginación de la red SOLO dentro del agujero
+            # (known_noised * (1 - mask)) -> Forzamos la realidad perfecta en el resto del plato
+            x = (x_pred * mask) + (known_noised * (1 - mask))
+
         model.train()
-
-        # Limita valores entre 0 y 1 (imagen válida)
         return x.clamp(0, 1)

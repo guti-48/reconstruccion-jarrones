@@ -1,48 +1,46 @@
-import torch
-import os
+import torch, os, glob
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 from utils.dataset import CeramicDataset
-from utils.models import EdgeModel
 from models.unet import UNet
 from models.diffusion import Diffusion
 
-# Configuración mínima
 class Config:
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    PATH = 'checkpoints'
-    GAN_LOSS = 'nsgan'
-    LR = 1e-4
-    BETA1 = 0.0
-    BETA2 = 0.999
-    D2G_LR = 0.1
-    FM_LOSS_WEIGHT = 10.0
+    PATH = 'checkpoints' 
+    ROOT_DIR = 'data/processed'
+    EDGES_DIR = 'data/results/edges'
+    #PATH = '/content/drive/MyDrive/Articulo-Investigacion/checkpoints' 
+    
+    # Rutas de datos (Igual que en train_main.py)
+    #ROOT_DIR = '/content/data_rapida/processed'
+    #EDGES_DIR = '/content/data_rapida/results/edges'
 
 dispositivo = Config.DEVICE
+config = Config()
 
-print("Imagen aleatoria")
-dataset = CeramicDataset(root_dir='data/processed')
+print("Cargamos los datos y modelo")
+dataset = CeramicDataset(root_dir=config.ROOT_DIR, edges_dir=config.EDGES_DIR)
 loader = DataLoader(dataset, batch_size=1, shuffle=True)
 items = next(iter(loader))
-masked_tensor, img_tensor, img_gray_tensor, edges_tensor, mask_tensor = [item.to(dispositivo) for item in items]
 
-print("Cargamos modelos")
-# Cargamos a Rafa (Sabe dibujar)
-config = Config()
-modelo_bordes = EdgeModel(config).to(dispositivo)
-modelo_bordes.load()
-modelo_bordes.eval()
+masked_tensor, img_tensor, _, edges_tensor, mask_tensor = [item.to(dispositivo) for item in items]
 
-# Cargamos a Oussama (Sabe pintar)
+# Inicializamos a Oussama con sus 8 canales
 modelo_difusion = UNet(in_channels=8, out_channels=3).to(dispositivo)
 
-ruta_oussama = os.path.join("checkpoints", "modeloConjunto_epoch8_ssim0.0066.pth")
+patron_busqueda = os.path.join(config.PATH, 'modelo_m3_diffusion_*.pth')
+archivos_guardados = glob.glob(patron_busqueda)
 
-if os.path.exists(ruta_oussama):
+if archivos_guardados:
+    rutaConj = max(archivos_guardados, key=os.path.getmtime)
+    print(f"   -> Encontrado checkpoint: {os.path.basename(rutaConj)}")
+    
     # Cargamos el archivo físico
-    checkpoint = torch.load(ruta_oussama, map_location=dispositivo)
+    checkpoint = torch.load(rutaConj, map_location=dispositivo)
 
+    # Extracción segura de pesos
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         modelo_difusion.load_state_dict(checkpoint["model_state_dict"])
     elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
@@ -50,17 +48,17 @@ if os.path.exists(ruta_oussama):
     else:
         modelo_difusion.load_state_dict(checkpoint)
         
-    print(f"   -> ¡Pesos de M3 encontrados y cargados! ({ruta_oussama})")
+    print(f"   -> [ÉXITO] Modelo M3 cargado y listo")
 else:
-    print(f"   -> [ERROR FATAL] No se encontró el archivo: {ruta_oussama}")
+    print(f"   -> [ERROR FATAL] No se encontró ningún archivo .pth en la carpeta '{config.PATH}'.")
+    exit()
 
 modelo_difusion.eval()
 difusion_engine = Diffusion(T=200, device=dispositivo)
 
 with torch.no_grad():
-    boceto, _, _, _ = modelo_bordes.process(img_gray_tensor, edges_tensor, mask_tensor)
-    
-    reconstruida = difusion_engine.sample(modelo_difusion, masked_tensor, boceto, mask_tensor)
+    print("Iniciando reconstrucción iterativa")
+    reconstruida = difusion_engine.sample(modelo_difusion, masked_tensor, edges_tensor, mask_tensor)
 
 print("Abriendo visor de imágenes...")
 def to_numpy(x, is_gray=False):
@@ -69,9 +67,10 @@ def to_numpy(x, is_gray=False):
         img = img.permute(1, 2, 0)
     return img.numpy().clip(0, 1)
 
+# Visualización comparativa
 plt.figure(figsize=(16, 5))
 plt.subplot(1, 4, 1); plt.title("1. Plato Dañado"); plt.axis('off'); plt.imshow(to_numpy(masked_tensor))
-plt.subplot(1, 4, 2); plt.title("2. Líneas Inventadas (M2)"); plt.axis('off'); plt.imshow(to_numpy(boceto, True), cmap="gray")
+plt.subplot(1, 4, 2); plt.title("2. Líneas GAN (M2)"); plt.axis('off'); plt.imshow(to_numpy(edges_tensor, True), cmap="gray")
 plt.subplot(1, 4, 3); plt.title("3. Color Restaurado (M3)"); plt.axis('off'); plt.imshow(to_numpy(reconstruida))
 plt.subplot(1, 4, 4); plt.title("4. Plato Original (Objetivo)"); plt.axis('off'); plt.imshow(to_numpy(img_tensor))
 

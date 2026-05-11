@@ -10,37 +10,24 @@ from models.unet import UNet
 from models.diffusion import Diffusion
 from utils.dataset import CeramicDataset
 
-# =========================
-# CONFIG
-# =========================
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 BATCH_SIZE = 4
 EPOCHS = 10
 LR = 1e-4
 
-# =========================
-# DATASET (YA USA EDGES GAN)
-# =========================
 dataset = CeramicDataset(root_dir='data/processed')
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-# =========================
-# DIFFUSION
-# =========================
-diffusion = Diffusion(T=200, device=device)  # 🔥 puedes subir a 500 si quieres más calidad
+diffusion = Diffusion(T=200, device=device)  # puedes subir a 500 si quieres más calidad
 
-# =========================
-# MODELO
-# =========================
 model = UNet(in_channels=8, out_channels=3).to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
-# =========================
-# TRAIN LOOP
-# =========================
-print("🚀 Entrenando Diffusion (fase final)...\n")
+
+print("Entrenando Diffusion (fase final)...\n")
 
 best_loss = float("inf")
 
@@ -98,4 +85,4 @@ for epoch in range(EPOCHS):
         torch.save(model.state_dict(), "checkpoints/diffusion_best.pth")
         print("Modelo guardado (mejor hasta ahora)")
 
-print("\n✅ Entrenamiento Diffusion completado")
+print("\nEntrenamiento Diffusion completado")

@@ -12,7 +12,7 @@ El desarrollo de esta segunda estapa está dividido en tres módulos principales
 
 - **Módulo 1: Datos y Procesamiento** Extracción, filtrado y generacion de datos sintéticos
 - **Módulo 2: Estrcutura**  Generación de bordes mediante `edge-connection`
-- **Módulo 3: Textura**  Relleno de color mediante la difusión inversa con `rePaint`
+- **Módulo 3: Textura**  Relleno de color mediante la difusión inversa con `repaint`
 
 
 
@@ -214,6 +214,11 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
   python train_diffusion.py
   ```
 
+### **11. `verImagen.py` — Inferencia y Validación Visual Final**
+- **Propósito:** Ejecutar la restauración completa de una vasija utilizando los modelos pre-entrenados.
+- **Proceso:** Carga automáticamente el mejor checkpoint histórico (`.pth`), extrae los bordes con la GAN, y realiza 200 pasos de *Reverse Diffusion* aplicando el recorte de silueta y la técnica *Repaint*.
+- **Salida:** Gráfica comparativa de 4 columnas (Dañada, Bordes, Reconstruida, Original).
+
 ---
 
 ## FLUJO COMPLETO DEL PROYECTO
@@ -333,6 +338,10 @@ python train_diffusion.py
 # Duración: ~10-20 minutos (GPU recomendada)
 ```
 
+**Paso 5: Inferencia Rápida (Restauración Visual)**
+Si no desea entrenar el modelo desde cero, asegúrese de tener los pesos en la carpeta `/checkpoints/` y ejecute:
+```bash
+python verImagen.py
 ---
 
 ## Salida esperada

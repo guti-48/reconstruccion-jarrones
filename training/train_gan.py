@@ -23,7 +23,7 @@ class Config:
     EPOCHS = 150
     EDGE_THRESHOLD = 0.5
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    START_EPOCH = 51 
+    START_EPOCH = 151 
     GEN_WEIGHTS = 'EdgeModel_gen.pth' 
     DIS_WEIGHTS = 'EdgeModel_dis.pth' 
 
