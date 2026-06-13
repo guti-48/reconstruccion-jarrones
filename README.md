@@ -90,36 +90,153 @@ Con los comandos anteriores obtendremos la selección de imagenes que usaremos c
 - **Uso:** Inferir y reconstruir el esqueleto estructural de los patrones faltantes
 - **No se ejecuta directamente**, se carga en `train_networks.py`
 
-### **5. `models/unet.py` — Arquitectura de red neuronal**
-- **Propósito:** Definir el modelo U-Net para predicción de ruido
-- **Clase:** `UNet(in_channels=3, out_channels=3)`
-- **Arquitectura:**
-  ```
-  Input (B, 3, 256, 256)
-    ↓
-  Encoder 1: Conv2d(3→64) + ReLU
-    ↓ MaxPool(2x2)
-  Encoder 2: Conv2d(64→128) + ReLU
-    ↓ Upsample(2x2)
-  Decoder 1: Conv2d(192→64) + ReLU [concatena skip connection]
-    ↓
-  Output: Conv2d(64→3)
-    ↓
-  Output (B, 3, 256, 256)
-  ```
-- **Función:** Predice ruido gaussiano (para entrenar modelo difusión)
-- **No se ejecuta directamente**, se carga en `train_diffusion.py`
+### **5. `models/unet.py` — Arquitectura U-Net sensible al tiempo para denoisificación**
+- **Propósito:** Red neuronal que predice ruido gaussiano condicionada al timestep de difusión
+- **Clase:** `UNet(in_channels=8, out_channels=3, time_dim=256)`
+- **Entrada:** 
+  - Imagen ruidosa + contexto (8 canales = 3 imagen + 3 masked + 1 bordes + 1 máscara)
+  - Tensor de timesteps t (posición en el schedule de difusión)
+- **Salida:** 
+  - Predicción del ruido gaussiano (3 canales, misma resolución que entrada)
 
-### **6. `models/diffusion.py` — Funciones de difusión**
-- **Propósito:** Implementar forward diffusion (corrupción con ruido)
-- **Función principal:** `add_noise(x, t)`
-  - Implementa ecuación DDPM: $x_t = \sqrt{\alpha_t} \cdot x_0 + \sqrt{1-\alpha_t} \cdot \epsilon$
-  - `α_t = 0.9^t` (decae exponencialmente)
-  - `ε ~ N(0,1)` (ruido gaussiano)
-  - **Entrada:** imagen original + timestep t
-  - **Salida:** imagen ruidosa + ruido gaussiano
-- **Uso:** Generar datos de entrenamiento corrompidos
-- **No se ejecuta directamente**, se importa en `train_diffusion.py`
+#### **Componentes principales:**
+
+**1. TimeEmbedding — Codificación sinusoidal del tiempo**
+- Convierte timestep escalar `t` en vector denso de dimensión `time_dim=256`
+- Usa posicional encoding sinusoidal (técnica de Transformers):
+  $$\text{emb}_{2i} = \sin(t / 10000^{2i/d}), \quad \text{emb}_{2i+1} = \cos(t / 10000^{2i/d})$$
+- Pasa por MLP: `Linear(256) → ReLU → Linear(256)`
+- **Razón:** Permite que la red sepa en qué paso del proceso de difusión está
+
+**2. ResBlock — Bloque residual con inyección de tiempo**
+- **Estructura:**
+  ```
+  Input → GroupNorm(8) → SiLU → Conv(in→out) 
+          ↓ + time_embedding (inyectado espacialmente)
+          GroupNorm(8) → SiLU → Conv(out→out) → Output
+          ↑___________________________skip connection__↑
+  ```
+- **Características:**
+  - **GroupNorm(8):** Normalización por grupo (más estable que BatchNorm)
+  - **SiLU:** Activación suave (mejor que ReLU para difusión)
+  - **Time injection:** Suma el embedding del tiempo espacialmente: `h = h + time_mlp(t_emb)[:, :, None, None]`
+  - **Skip connection:** Residual convencional para gradientes más estables
+- **Ventaja:** La información del timestep se difunde por toda la arquitectura
+
+**3. Down — Bloque de downsampling (encoder)**
+- Aplica `ResBlock` + submuestreo espacial
+- **Submuestreo:** `Conv2d(kernel=4, stride=2, padding=1)` (mejor que MaxPool)
+- **Retorna:** (salida para skip connection, salida downsampled para siguiente nivel)
+
+**4. Up — Bloque de upsampling (decoder)**
+- Upsampling con `ConvTranspose2d(kernel=4, stride=2, padding=1)`
+- Concatena con skip connection del encoder: `torch.cat([x, skip], dim=1)`
+- Aplica `ResBlock` sobre la concatenación
+- **Manejo de tamaños:** Interpolación si shapes no coinciden
+
+#### **Arquitectura completa (3 niveles):**
+```
+Input (B, 8, 256, 256)
+  ↓
+Down1: ResBlock(8→64) + Conv(stride=2)  → salida (B, 64, 128, 128) [guarda s1]
+  ↓
+Down2: ResBlock(64→128) + Conv(stride=2) → salida (B, 128, 64, 64) [guarda s2]
+  ↓
+Down3: ResBlock(128→256) + Conv(stride=2) → salida (B, 256, 32, 32) [guarda s3]
+  ↓
+Bottleneck: ResBlock(256→256)  [PUNTO MÁS COMPRIMIDO]
+  ↓
+Up1: ConvTranspose(256→128) + ResBlock(128+256=384→128) → (B, 128, 64, 64) + s3
+  ↓
+Up2: ConvTranspose(128→64) + ResBlock(64+128=192→64) → (B, 64, 128, 128) + s2
+  ↓
+Up3: ConvTranspose(64→64) + ResBlock(64+64=128→64) → (B, 64, 256, 256) + s1
+  ↓
+Output: Conv1x1(64→3) → (B, 3, 256, 256)
+```
+
+#### **Detalles de implementación:**
+- **Parámetros del constructor:**
+  - `in_channels=8`: Concatenación de imagen ruidosa (3) + imagen intacta (3) + bordes (1) + máscara (1)
+  - `out_channels=3`: Predice ruido gaussiano de 3 canales (RGB)
+  - `time_dim=256`: Dimensión del embedding temporal
+- **Skip connections:** Todas las salidas de Down se concatenan en Up (información multiresolución)
+- **Activación:** SiLU en lugar de ReLU (suavidad crucial para denoisificación)
+- **GroupNorm:** 8 grupos por capa (normalización sin dependencia del batch)
+
+#### **Funcionamiento durante el entrenamiento (forward pass):**
+1. Recibe: imagen ruidosa, imagen original, bordes, máscara, timestep t
+2. Codifica t con TimeEmbedding
+3. Encoder extrae features jerárquicas (64→128→256 canales)
+4. Bottleneck actúa como cuello de botella (comprensión máxima)
+5. Decoder reconstr uye con skip connections (4x, 8x, 16x tamaños)
+6. Output: predice ε_t (ruido a remover)
+7. **Loss:** MSE entre ruido predicho y ruido real añadido en forward diffusion
+
+- **Uso:** Entrenar con `train_diffusion.py` para que aprenda a predecir ruido en cualquier timestep
+- **No se ejecuta directamente**, se carga como modelo en scripts de entrenamiento e inferencia
+
+### **6. `models/diffusion.py` — Procesos de difusión (Forward + Reverse)**
+- **Propósito:** Implementar el pipeline completo de difusión probabilística (DDPM) para generación con inpainting
+
+#### **Clase: `Diffusion`**
+
+**Parámetros de inicialización:**
+- `T = 700`: Número total de pasos de difusión (tiempo máximo del proceso)
+- `beta_start = 1e-4`, `beta_end = 0.02`: Define el ruido schedule lineal
+- `device`: CPU o GPU donde se ejecuta
+
+**Componentes principales del constructor:**
+
+1. **Noise Schedule (β_t):**
+   - Secuencia lineal: $\beta_t = \beta_{start} + \frac{t}{T}(\beta_{end} - \beta_{start})$
+   - Define cuánto ruido se añade en cada paso (crece gradualmente de 1e-4 a 0.02)
+   - Almacenado en `self.beta` (tensor de 700 valores)
+
+2. **Alpha (α_t) y Alpha-hat (ᾱ_t):**
+   - $\alpha_t = 1 - \beta_t$ (señal conservada en cada paso)
+   - $\bar{\alpha}_t = \prod_{i=1}^{t} \alpha_i$ (producto acumulado, permite saltar directamente a cualquier t)
+   - Matemáticamente: $\bar{\alpha}_t$ responde: "¿Cuánta señal queda tras t pasos de ruido?"
+
+**Método 1: `add_noise(x0, t)` — FORWARD DIFFUSION**
+- Implementa el proceso de corrupción progresiva: $q(x_t|x_0)$
+- **Ecuación DDPM:** 
+  $$x_t = \sqrt{\bar{\alpha}_t} \cdot x_0 + \sqrt{1-\bar{\alpha}_t} \cdot \epsilon$$
+  donde $\epsilon \sim \mathcal{N}(0, I)$ es ruido gaussiano puro
+- **Entrada:** 
+  - `x0`: tensor de imagen original (B, 3, 256, 256)
+  - `t`: tensor de timesteps (B,) con valores en [0, T)
+- **Salida:** tupla `(x_t, noise)`
+  - `x_t`: imagen ruidosa en el paso t
+  - `noise`: el ruido gaussiano utilizado (para entrenar con MSE Loss)
+- **Uso:** Generar datos de entrenamiento corrompidos para el modelo denoisificador
+
+**Método 2: `sample(model, masked, edges, mask)` — REVERSE DIFFUSION con REPAINT**
+- Implementa la reconstrucción iterativa desde ruido puro hasta imagen limpia
+- Incluye **REPAINT inpainting**: mantiene forzadas las regiones intactas durante la decodificación
+- **Parámetros:**
+  - `model`: Red U-Net entrenada para predecir ruido
+  - `masked`: Imagen dañada (con huecos) - (B, 3, 256, 256)
+  - `edges`: Bordes estructurales extraídos - (B, 1, 256, 256)
+  - `mask`: Máscara binaria (1=daño/hueco, 0=intacto) - (B, 1, 256, 256)
+- **Algoritmo iterativo (T → 1):**
+  1. **Inicializa** con ruido puro: $x_T \sim \mathcal{N}(0, I)$
+  2. **Loop inverso** para cada t en [T-1, ..., 1]:
+     - Concatena entrada: $[x_t, masked, edges, mask]$ y pasa al modelo
+     - Red predice: $\hat{\epsilon}_t = \text{model}([x_t, masked, edges, mask], t)$
+     - **Denoisificación normal:** 
+       $$x_{pred} = \frac{1}{\sqrt{\alpha_t}} \left( x_t - \frac{1-\alpha_t}{\sqrt{1-\bar{\alpha}_t}} \hat{\epsilon}_t \right) + \sqrt{\beta_t} \cdot z$$
+       donde $z \sim \mathcal{N}(0, I)$ para $t > 1$, $z = 0$ para $t = 1$
+     - **REPAINT Intervention** (clave para inpainting):
+       - Calcula cómo se vería la región intacta/conocida ruidosa en el paso anterior:
+         $$x_{known,t-1} = \sqrt{\bar{\alpha}_{t-1}} \cdot masked + \sqrt{1-\bar{\alpha}_{t-1}} \cdot \epsilon$$
+       - **Fusión híbrida:** Fuerza las regiones conocidas y permite imaginación en daños:
+         $$x_{t-1} = (x_{pred} \cdot mask) + (x_{known,t-1} \cdot (1-mask))$$
+     - Esto garantiza que las zonas intactas nunca se desvíen de la realidad
+  3. **Retorna:** imagen reconstruida clipeada a [0, 1]
+
+- **Uso:** Generar predicción de regiones dañadas mientras se preservan áreas intactas
+- **No se ejecuta directamente**, se importa y usa en `train_diffusion.py`
 
 ### **7. `utils/visualize.py` — Visualización de resultados**
 - **Propósito:** Mostrar comparación visual de reconstrucciones
