@@ -303,32 +303,105 @@ Output: Conv1x1(64→3) → (B, 3, 256, 256)
   python train_networks.py
   ```
 
-### **10. `training/train_diffusion.py` — Script de entrenamiento**
-- **Propósito:** Entrenar el modelo U-Net para predecir ruido (reverse diffusion)
-- **Flujo de ejecución:**
-  ```
-  1. Crear Dataset y DataLoader desde imagenes_procesadas/
-  2. Instanciar U-Net y optimizer
-  3. Loop por 5 epochs:
-     a) Para cada batch (masked, real):
-        - Sample timestep aleatorio: t ∈ [1..10]
-        - Añadir ruido: noisy, noise_gt = add_noise(real, t)
-        - Predecir: pred_noise = model(noisy)
-        - Calcular loss: MSE(pred_noise, noise_gt)
-        - Backprop y actualizar pesos
-     b) Imprimir loss promedio del epoch
-     c) Visualizar reconstrucción con mostrar_resultados()
-  4. Guardar modelo entrenado (opcional)
-  ```
-- **Parámetros:**
-  - `batch_size=4`
-  - `learning_rate=1e-4`
-  - `epochs=5`
-  - `timesteps=[1..10]`
+
+### **10. `training/train_diffusion.py` — Script de entrenamiento de difusión inversa**
+- **Propósito:** Entrenar el modelo U-Net para predecir ruido en el proceso de reverse diffusion
+- **Parámetros principales:**
+  - `T=200`: Número de pasos de difusión (puede subirse a 500 para mejor calidad)
+  - `EPOCHS=10`: Número de epochs de entrenamiento
+  - `BATCH_SIZE=4`: Tamaño del batch
+  - `LR=1e-4`: Learning rate del optimizer Adam
+  - `device`: GPU/CPU automáticamente detectado
+
+#### **Flujo de entrenamiento (Loop principal):**
+
+**Paso 1: Preparación de datos**
+```
+1. Crear Dataset y DataLoader desde data/processed/
+2. Instanciar:
+   - Diffusion(T=200): Clase para forward/reverse diffusion
+   - UNet(in_channels=8, out_channels=3): Red denoisificadora
+   - Optimizer: Adam(lr=1e-4)
+3. Inicializar best_loss = inf para checkpoint management
+```
+
+**Paso 2: Bucle de entrenamiento (10 epochs)**
+```
+Para cada epoch:
+  Para cada batch (masked, real, gray, edges, mask):
+    
+    A. SAMPLING DE TIMESTEP:
+       - t = randint(0, T=200) → timestep aleatorio en [0, 200)
+       - Cada imagen del batch puede tener t diferente
+    
+    B. FORWARD DIFFUSION:
+       - x_t, noise = diffusion.add_noise(real, t)
+       - Corrompe la imagen original con ruido en paso t
+       - noise es el ruido gaussiano real (N(0,I))
+    
+    C. PREPARACIÓN DE ENTRADA A LA RED:
+       - input_model = [x_t (3) + masked (3) + edges (1) + mask (1)]
+       - Total: 8 canales de información contextual
+    
+    D. PREDICCIÓN DE RUIDO:
+       - predicted_noise = model(input_model, t)
+       - Red predice qué ruido se añadió
+    
+    E. CÁLCULO DE LOSS (IMPORTANTE - WEIGHTED):
+       - loss = ((noise - predicted_noise)² * mask).sum() / (mask.sum() + ε)
+       - Se calcula SOLO en la región dañada (mask=1)
+       - Ignore el resto del plato (mask=0)
+       - Evita que la red "olvide" copiar áreas intactas
+    
+    F. BACKPROPAGATION Y ACTUALIZACIÓN:
+       - optimizer.zero_grad()
+       - loss.backward()
+       - optimizer.step()
+    
+  Imprime: "Epoch X/10 - Loss: Y.YYYY"
+  
+  Si loss mejora (< best_loss):
+    - Guarda checkpoint: checkpoints/diffusion_best.pth
+    - Imprime: "Modelo guardado (mejor hasta ahora)"
+```
+
+**Paso 3: Convergencia esperada**
+- El loss debe **disminuir** monótonamente a lo largo de los epochs
+- Típicamente: 0.5 → 0.3 → 0.2 → 0.15 → ...
+- Si loss sube o no converge: revisar learning rate, architecture, o data quality
+
+#### **Diferencias con DDPM clásico:**
+| Aspecto | DDPM Clásico | Este Modelo |
+|--------|-------------|-----------|
+| **Pérdida de datos** | Predice ruido en imagen entera | Predice ruido SOLO en agujeros |
+| **Contexto** | Solo imagen ruidosa | Imagen + original + bordes + máscara |
+| **T (pasos)** | Típicamente 1000 | Aquí 200 (más rápido) |
+| **Aplicación** | Generación de texto-a-imagen | Inpainting de cerámica |
+
+#### **Archivos generados:**
+- `checkpoints/diffusion_best.pth`: Pesos del modelo con menor loss
+- Histórico de losses en console (registrado en logs si se habilita)
+
 - **Ejecución:**
   ```bash
   cd training
   python train_diffusion.py
+  # Duración: ~10-30 minutos en GPU, ~2-3 horas en CPU
+  ```
+
+- **Salida esperada:**
+  ```
+  Entrenando Diffusion (fase final)...
+  
+  Epoch 1/10 - Loss: 0.4567
+  Modelo guardado (mejor hasta ahora)
+  Epoch 2/10 - Loss: 0.3421
+  Modelo guardado (mejor hasta ahora)
+  Epoch 3/10 - Loss: 0.2891
+  ...
+  Epoch 10/10 - Loss: 0.1234
+  
+  Entrenamiento Diffusion completado
   ```
 
 ### **11. `verImagen.py` — Inferencia y Validación Visual Final**
