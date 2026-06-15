@@ -1,178 +1,171 @@
-import torch, os, time, glob, re
-import torch.nn as nn
+import argparse
+import glob
+import os
+import re
+import time
+
+import torch
 from torch.utils.data import DataLoader
 
-# Importaciones M1 (Datos y Orquestación)
-from utils.dataset import CeramicDataset
-from utils.metrics import calcular_metricas
-from utils.checkpoint import CheckpointManager
-
-# Importaciones M3 (Difusión de Oussama)
+from models.diffusion import Diffusion
 from models.unet import UNet
-from models.diffusion import Diffusion 
+from utils.checkpoint import CheckpointManager
+from utils.dataset import CeramicDataset
 
-# CONFIGURACIÓN Y RUTAS (PREPARADO PARA COLAB)
-dispositivo = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"[INFO] Hardware detectado: {dispositivo}")
 
-class Config:
-    DEVICE         = dispositivo
-    PATH           = '/content/drive/MyDrive/Articulo-Investigacion/checkpoints'
-    #PATH           = 'checkpoints'
-    LR             = 1e-5
-    BATCH_SIZE     = 16  
-    EPOCHS         = 150
-    NUM_WORKERS    = 2  
-    LOG_INTERVAL   = 10
-    DIFFUSION_T    = 200 
-    
-    # Rutas adaptadas a tu estructura (ajustables para Colab)
-    # ANTICIPACIÓN DE FALLO: Centralizamos las rutas aquí para no rebuscar en el código si cambian en Drive
-    ROOT_DIR       = '/content/data_rapida/processed' 
-    EDGES_DIR      = '/content/data_rapida/results/edges' 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Entrenamiento global M2(Rafa/bordes) + M3(Oussama/difusion)."
+    )
+    parser.add_argument("--root-dir", default="data/processed")
+    parser.add_argument("--edges-dir", default="data/results/edges")
+    parser.add_argument("--checkpoints-dir", default="checkpoints")
+    parser.add_argument("--edge-mode", choices=["generated", "canny"], default="generated")
+    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--log-interval", type=int, default=10)
+    parser.add_argument("--diffusion-t", type=int, default=200)
+    parser.add_argument("--resume", action="store_true", default=True)
+    parser.add_argument("--no-resume", dest="resume", action="store_false")
+    return parser.parse_args()
 
-    #ROOT_DIR       = 'data/processed' 
-    #EDGES_DIR      = 'data/results/edges'
 
-config = Config()
+def latest_diffusion_checkpoint(checkpoints_dir):
+    pattern = os.path.join(checkpoints_dir, "modelo_m3_diffusion_epoch*.pth")
+    candidates = glob.glob(pattern)
+    if not candidates:
+        fallback = os.path.join(checkpoints_dir, "diffusion_best.pth")
+        return fallback if os.path.exists(fallback) else None
+    return max(candidates, key=os.path.getmtime)
 
-# 1. CARGA DE DATOS (EL PUENTE M2 -> M3)
-# Inyectamos explícitamente la ruta de los bordes GAN al Dataset
-dataset = CeramicDataset(root_dir=config.ROOT_DIR, edges_dir=config.EDGES_DIR)
 
-cargaDatos = DataLoader(
-    dataset,
-    batch_size=config.BATCH_SIZE,
-    shuffle=True,
-    drop_last=True,
-    num_workers=config.NUM_WORKERS,
-    pin_memory=(dispositivo.type == 'cuda')
-)
-print(f"[INFO] Dataset: {len(dataset)} imágenes | {len(cargaDatos)} batches por época")
-
-guardian = CheckpointManager(save_dir=config.PATH, model_name='modelo_m3_diffusion')
-
-# ==========================================
-# 2. INICIALIZACIÓN M3 (OUSSAMA)
-# ==========================================
-# UNet condicionada a 8 canales: 3(Ruido) + 3(Dañada) + 1(Bordes GAN) + 1(Máscara)
-modelo_difusion = UNet(in_channels=8, out_channels=3).to(dispositivo)
-difusion_engine = Diffusion(T=config.DIFFUSION_T, device=dispositivo)
-
-optimizador_difusion = torch.optim.Adam(modelo_difusion.parameters(), lr=config.LR)
-
-# 3. RECUPERACIÓN DE CHECKPOINTS
-patron_busqueda = os.path.join(config.PATH, 'modelo_m3_diffusion_epoch*.pth')
-archivos_guardados = glob.glob(patron_busqueda)
-
-if archivos_guardados:
-    ruta_m3 = max(archivos_guardados, key=os.path.getmtime)
-    checkpoint = torch.load(ruta_m3, map_location=dispositivo)
-    
-    # Extracción segura de pesos
+def load_model_state(model, checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-        modelo_difusion.load_state_dict(checkpoint["model_state_dict"])
+        state_dict = checkpoint["model_state_dict"]
     elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        modelo_difusion.load_state_dict(checkpoint["state_dict"])
+        state_dict = checkpoint["state_dict"]
     else:
-        modelo_difusion.load_state_dict(checkpoint)
-        
-    nombre_archivo = os.path.basename(ruta_m3)
-    print(f"  -> [ÉXITO] Se retoma M3 desde el archivo automático: {nombre_archivo}")
+        state_dict = checkpoint
+    model.load_state_dict(state_dict)
 
-    match = re.search(r'ssim([0-9]+\.[0-9]+)', nombre_archivo)
-    match = re.search(r'loss([0-9]+\.[0-9]+)', nombre_archivo)
-    if match:
-        guardian.best_metric = float(match.group(1))
-        print(f"  -> [INFO] Guardián actualizado. Récord histórico a batir: {guardian.best_metric:.4f}")
-else:
-    print("  -> [AVISO] No hay checkpoints previos. Entrenando Difusión (M3) desde cero.")
 
-use_amp = (dispositivo.type == 'cuda')
-scaler  = torch.cuda.amp.GradScaler(enabled=use_amp)
+def infer_best_loss(checkpoint_path):
+    match = re.search(r"loss([0-9]+(?:\.[0-9]+)?)", os.path.basename(checkpoint_path))
+    return float(match.group(1)) if match else None
 
-# 4. BUCLE DE ENTRENAMIENTO PRINCIPAL
-for epoch in range(1, config.EPOCHS + 1):
-    print(f"\n{'='*50}\n  Época {epoch}/{config.EPOCHS}\n{'='*50}")
-    modelo_difusion.train()
 
-    loss_m3_acumulada = 0.0
-    t_inicio_epoca    = time.time()
+def train():
+    args = parse_args()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_amp = device.type == "cuda"
 
-    for batch_idx, items in enumerate(cargaDatos):
+    print(f"[INFO] Hardware detectado: {device}")
+    print(f"[INFO] Dataset: {args.root_dir}")
+    print(f"[INFO] Bordes M2: {args.edge_mode} ({args.edges_dir})")
 
-        masked_tensor, img_tensor, _, edges_tensor, mask_tensor = [
-            item.to(dispositivo) for item in items
-        ]
+    dataset = CeramicDataset(
+        root_dir=args.root_dir,
+        edges_dir=args.edges_dir,
+        edge_mode=args.edge_mode,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True,
+        num_workers=args.num_workers,
+        pin_memory=use_amp,
+    )
 
-        t = torch.randint(0, difusion_engine.T, (img_tensor.shape[0],), device=dispositivo).long()
+    if len(dataloader) == 0:
+        raise RuntimeError("El DataLoader no tiene batches. Baja --batch-size o revisa el dataset.")
 
-        noisy_rgb, noise = difusion_engine.add_noise(img_tensor, t)
+    print(f"[INFO] Dataset: {len(dataset)} imagenes | {len(dataloader)} batches por epoca")
 
-        input_m3 = torch.cat([noisy_rgb, masked_tensor, edges_tensor, mask_tensor], dim=1)
+    model = UNet(in_channels=8, out_channels=3).to(device)
+    diffusion = Diffusion(T=args.diffusion_t, device=device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    guardian = CheckpointManager(save_dir=args.checkpoints_dir, model_name="modelo_m3_diffusion")
 
-        optimizador_difusion.zero_grad()
+    if args.resume:
+        checkpoint_path = latest_diffusion_checkpoint(args.checkpoints_dir)
+        if checkpoint_path:
+            load_model_state(model, checkpoint_path, device)
+            best_loss = infer_best_loss(checkpoint_path)
+            if best_loss is not None:
+                guardian.best_metric = best_loss
+            print(f"[INFO] M3 retomado desde: {os.path.basename(checkpoint_path)}")
+        else:
+            print("[INFO] No hay checkpoint M3 previo. Entrenando desde cero.")
 
-        with torch.amp.autocast('cuda', enabled=use_amp):
-            pred_noise = modelo_difusion(input_m3, t)
-            
-            mse_loss = (noise - pred_noise) ** 2
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
-            mapa_pesos = 1.0 + (9.0 * mask_tensor)
+    for epoch in range(1, args.epochs + 1):
+        print(f"\n{'=' * 50}\n  Epoca {epoch}/{args.epochs}\n{'=' * 50}")
+        model.train()
 
-            mapa_pesos[:, :, 180:, :] = 0.0 
+        epoch_loss = 0.0
+        start = time.time()
 
-            loss_m3 = (mse_loss * mapa_pesos).sum() / (mapa_pesos.sum() + 1e-8)
+        for batch_idx, items in enumerate(dataloader):
+            masked, real, _, edges, mask = [item.to(device) for item in items]
+            t = torch.randint(0, diffusion.T, (real.shape[0],), device=device).long()
+            noisy_rgb, noise = diffusion.add_noise(real, t)
+            model_input = torch.cat([noisy_rgb, masked, edges, mask], dim=1)
 
-        scaler.scale(loss_m3).backward()
-        scaler.step(optimizador_difusion)
-        scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                pred_noise = model(model_input, t)
+                mse = (noise - pred_noise) ** 2
+                weights = 1.0 + (9.0 * mask)
+                weights[:, :, 180:, :] = 0.0
+                loss = (mse * weights).sum() / (weights.expand_as(mse).sum() + 1e-8)
 
-        loss_m3_acumulada += loss_m3.item()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
-        if (batch_idx + 1) % config.LOG_INTERVAL == 0 or (batch_idx + 1) == len(cargaDatos):
-            batches_hechos = batch_idx + 1
-            elapsed        = time.time() - t_inicio_epoca
-            seg_por_batch  = elapsed / batches_hechos
-            restante       = seg_por_batch * (len(cargaDatos) - batches_hechos)
-            print(
-                f"  Batch {batches_hechos:>3}/{len(cargaDatos)} "
-                f"| M3Loss (MSE): {loss_m3_acumulada/batches_hechos:.4f} "
-                f"| ETA: {int(restante//60)}m {int(restante%60)}s"
-            )
+            epoch_loss += loss.item()
+            batches_done = batch_idx + 1
+            if batches_done % args.log_interval == 0 or batches_done == len(dataloader):
+                elapsed = time.time() - start
+                seconds_per_batch = elapsed / batches_done
+                remaining = seconds_per_batch * (len(dataloader) - batches_done)
+                print(
+                    f"  Batch {batches_done:>3}/{len(dataloader)} "
+                    f"| M3Loss: {epoch_loss / batches_done:.4f} "
+                    f"| ETA: {int(remaining // 60)}m {int(remaining % 60)}s"
+                )
 
-    tiempo_epoca = time.time() - t_inicio_epoca
-    print(f"\n  Resumen época {epoch} | Loss: {loss_m3_acumulada / len(cargaDatos):.4f} | Tiempo: {int(tiempo_epoca//60)}m {int(tiempo_epoca%60)}s")
+        avg_loss = epoch_loss / len(dataloader)
+        elapsed = time.time() - start
+        print(f"\n  Resumen epoca {epoch} | Loss: {avg_loss:.4f} | Tiempo: {int(elapsed // 60)}m {int(elapsed % 60)}s")
 
- 
-    # 5. FASE DE EVALUACIÓN 
-    modelo_difusion.eval()
-    
-    with torch.no_grad():
-        print("  Generando muestra para validación...")
-        img_eval     = img_tensor[0:1]
-        masked_eval  = masked_tensor[0:1]
-        edges_eval   = edges_tensor[0:1]
-        mask_eval    = mask_tensor[0:1]
+        model.eval()
+        with torch.no_grad():
+            img_eval = real[0:1]
+            masked_eval = masked[0:1]
+            edges_eval = edges[0:1]
+            mask_eval = mask[0:1]
+            reconstructed = diffusion.sample(model, masked_eval, edges_eval, mask_eval)
 
-        imagen_reconstruida = difusion_engine.sample(modelo_difusion, masked_eval, edges_eval, mask_eval)
-
-        try:
-            mask_rgb = mask_eval.expand_as(img_eval).clone() # Clonamos para no alterar el tensor original
-
+            mask_rgb = mask_eval.expand_as(img_eval).clone()
             mask_rgb[:, :, 180:, :] = 0
+            fake_pixels = reconstructed[mask_rgb == 1]
+            real_pixels = img_eval[mask_rgb == 1]
 
-            pixeles_falsos = imagen_reconstruida[mask_rgb == 1]
-            pixeles_reales = img_eval[mask_rgb == 1]
-
-            if pixeles_falsos.numel() > 0:
-                error_agujero = torch.nn.functional.l1_loss(pixeles_falsos, pixeles_reales).item()
-                print(f"  Error L1 (Estricto en Cerámica): {error_agujero:.4f}")
-                guardian.saveBest(modelo_difusion, error_agujero, epoch)
+            if fake_pixels.numel() > 0:
+                hole_l1 = torch.nn.functional.l1_loss(fake_pixels, real_pixels).item()
+                print(f"  Error L1 en agujero: {hole_l1:.4f}")
+                guardian.saveBest(model, hole_l1, epoch)
             else:
-                print("  [AVISO] La máscara estaba completamente en la zona ignorada. Se salta validación.")
+                print("  [AVISO] La mascara cae en la zona ignorada. Se salta validacion.")
 
-        except Exception as e:
-            print(f"  [AVISO CRÍTICO] Error en cálculo de métricas: {e}")
+    print("\n[INFO] Entrenamiento global completado.")
 
-print("\n[INFO] Entrenamiento Completo y a salvo.")
+
+if __name__ == "__main__":
+    train()
