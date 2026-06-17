@@ -119,4 +119,3 @@ def generar_esqueletos():
 
 if __name__ == "__main__":
     generar_esqueletos()
-    
