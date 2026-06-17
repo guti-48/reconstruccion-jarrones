@@ -6,9 +6,9 @@ Este proyecto reconstruye zonas danadas en imagenes 2D de ceramica antigua. La e
 
 ## Modulos del proyecto
 
-- **M1 - datos y mascaras:** descarga las imagenes originales del conjunto Temasek Wreck, las redimensiona a 256x256 y genera mascaras sinteticas de dano. A partir de cada mascara crea tambien una imagen danada que sirve como entrada del sistema.
-- **M2 - generacion de bordes:** usa una GAN entrenada para completar la estructura del dibujo dentro de la zona danada. El resultado es un esqueleto de bordes que guia la reconstruccion posterior.
-- **M3 - difusion inversa:** usa una U-Net de difusion condicionada por la imagen danada, la mascara y los bordes de M2. Su objetivo es reconstruir color y textura respetando la estructura propuesta por la GAN.
+- **M1 - datos y mascaras:** descarga las imagenes originales del conjunto Temasek Wreck, las redimensiona a 256x256 y genera mascaras sinteticas de dano. A partir de cada mascara crea tambien una imagen dañada que sirve como entrada del sistema.
+- **M2 - generacion de bordes:** usa una GAN entrenada para completar la estructura del dibujo dentro de la zona dañada. El resultado es un esqueleto de bordes que guia la reconstruccion posterior.
+- **M3 - difusion inversa:** usa una U-Net de difusion condicionada por la imagen dañada, la mascara y los bordes de M2. Su objetivo es reconstruir color y textura respetando la estructura propuesta por la GAN.
 
 El flujo es escalable a otros conjuntos de imagenes: habria que preparar las imagenes con el mismo formato y reentrenar los modelos para que aprendan el nuevo dominio visual.
 
